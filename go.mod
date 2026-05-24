@@ -7,6 +7,8 @@ require (
 	github.com/mark3labs/mcp-go v0.45.0
 )
 
+replace github.com/gwillem/appie-go => github.com/celerex/appie-go v0.0.0-20260524111658-4e14807f5f70
+
 require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect

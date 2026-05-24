@@ -64,6 +64,7 @@ func main() {
 	callbackPort := envIntOr("AH_CALLBACK_PORT", defaultCallbackPort)
 	mcpPort := envIntOr("AH_MCP_PORT", defaultMCPPort)
 	tokensPath := TokensPath()
+	tools.LogInfo("startup", "config site=%s transport=%s remote=%t callback_host=%s callback_port=%d mcp_port=%d log_file_set=%t", ahSite(), *transport, *remote, callbackHost, callbackPort, mcpPort, os.Getenv("AH_LOG_FILE") != "")
 
 	// Ensure token directory exists with secure permissions.
 	if err := ensureTokenDir(tokensPath); err != nil {

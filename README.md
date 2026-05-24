@@ -2,7 +2,7 @@
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server for the Albert Heijn (🇳🇱) supermarket API. Works with any MCP-compatible client.
+A [Model Context Protocol](https://modelcontextprotocol.io) server for the Albert Heijn supermarket API. Works with any MCP-compatible client.
 
 ## What you can do
 
@@ -41,6 +41,7 @@ Things the AH app and website can't do — but your AI assistant can:
 - Search products, check bonus offers, and drill into promotion groups
 - Browse last-chance / vandaag-af clearance items (store-specific)
 - Manage your online shopping cart (view, add, update, remove, clear)
+- Note: on the AH site, you may need to choose an order moment before the cart accepts new items
 - View order history, order details, and frequently bought items
 - Read and update your shopping list and named favourite lists
 - Move your shopping list directly to your online order
@@ -83,6 +84,8 @@ Requires Go 1.23+.
 
 | Variable | Default | Description |
 |---|---|---|
+| `AH_SITE` | `nl` | Albert Heijn site to target. Supported values: `nl` and `be`. This switches the API/login hosts and the `X-Application` header used for requests. The Belgian `AHBEWEBSHOP` header mapping is based on reverse-engineering notes here: https://gist.github.com/jabbink/8bfa44bdfc535d696b340c46d228fdd1 |
+| `AH_LOG_FILE` | unset | Optional log file path. When set, tool/auth logs are written to stderr and appended to this file. |
 | `AH_CALLBACK_HOST` | `http://localhost:9876` | Base URL for the OAuth proxy. Users open this URL in their browser during login. Override to your server's public URL for remote deployments. |
 | `AH_CALLBACK_PORT` | `9876` | Port the temporary OAuth reverse-proxy server listens on. |
 | `AH_MCP_PORT` | `3000` | Port for the MCP HTTP server (`--transport sse` or `--transport streamable-http`). |

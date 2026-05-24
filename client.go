@@ -28,7 +28,7 @@ func GetClient() (*appie.Client, error) {
 // Call this after a successful OAuth login to pick up newly saved tokens.
 func ReloadClient() (*appie.Client, error) {
 	path := TokensPath()
-	c, err := appie.NewWithConfig(path)
+	c, err := appie.NewWithConfig(path, appie.WithSite(ahSite()))
 	if err != nil {
 		return nil, fmt.Errorf("create appie client: %w", err)
 	}

@@ -16,12 +16,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mrserzhan/ah-mcp/tools"
 )
 
 const (
-	ahAPIBase        = "https://api.ah.nl"
-	ahLoginBase      = "https://login.ah.nl"
-	ahClientID       = "appie-ios"
+	defaultAHSite    = "nl"
 	ahClientVersion  = "9.28"
 	ahUserAgent      = "Appie/9.28 (iPhone17,3; iPhone; CPU OS 26_1 like Mac OS X)"
 	oauthTimeout     = 5 * time.Minute
@@ -51,6 +51,36 @@ type tokenResponse struct {
 	RefreshToken string `json:"refresh_token"`
 	MemberID     string `json:"member_id,omitempty"`
 	ExpiresIn    int    `json:"expires_in"`
+}
+
+func ahSite() string {
+	site := strings.ToLower(strings.TrimSpace(os.Getenv("AH_SITE")))
+	if site == "be" {
+		return "be"
+	}
+	return defaultAHSite
+}
+
+func ahAPIBase() string {
+	return "https://api.ah." + ahSite()
+}
+
+func ahClientID() string {
+	if ahSite() == "be" {
+		return "appie-be-ios"
+	}
+	return "appie-ios"
+}
+
+func ahLoginBase() string {
+	return "https://login.ah." + ahSite()
+}
+
+func ahApplication() string {
+	if ahSite() == "be" {
+		return "AHBEWEBSHOP"
+	}
+	return "AHWEBSHOP"
 }
 
 // oauthState guards the in-progress OAuth flow so concurrent tool calls are safe.
@@ -136,7 +166,7 @@ func RefreshIfNeeded(ctx context.Context, path string) error {
 	}
 
 	reqBody := map[string]string{
-		"clientId":     ahClientID,
+		"clientId":     ahClientID(),
 		"refreshToken": tf.RefreshToken,
 	}
 	var tok tokenResponse
@@ -169,7 +199,8 @@ func StartOAuthFlow(ctx context.Context, callbackHost string, callbackPort int, 
 		return "", nil, fmt.Errorf("start OAuth server on port %d: %w", callbackPort, listenErr)
 	}
 
-	target, _ := url.Parse(ahLoginBase)
+	target, _ := url.Parse(ahLoginBase())
+	tools.LogInfo("auth", "oauth_start site=%s login_host=%s api_base=%s callback_host=%s", ahSite(), target.Host, ahAPIBase(), callbackHost)
 	codeCh := make(chan string, 1)
 	doneCh := make(chan error, 1)
 
@@ -196,7 +227,7 @@ func StartOAuthFlow(ctx context.Context, callbackHost string, callbackPort int, 
 			req.Host = target.Host
 			req.Header.Del("Accept-Encoding")
 			// Rewrite Origin and Referer so AH's API doesn't reject the request
-			// because it sees our proxy hostname instead of login.ah.nl.
+			// because it sees our proxy hostname instead of the AH login host.
 			if origin := req.Header.Get("Origin"); origin != "" {
 				req.Header.Set("Origin", target.Scheme+"://"+target.Host)
 			}
@@ -220,8 +251,9 @@ func StartOAuthFlow(ctx context.Context, callbackHost string, callbackPort int, 
 	// Build the login URL that the user must open (via our local proxy).
 	loginURL = fmt.Sprintf(
 		"%s/login?client_id=%s&response_type=code&redirect_uri=appie://login-exit",
-		callbackHost, ahClientID,
+		callbackHost, ahClientID(),
 	)
+	tools.LogInfo("auth", "oauth_login_url site=%s client_id=%s login_base=%s login_url=%s", ahSite(), ahClientID(), ahLoginBase(), loginURL)
 
 	// Wait for the code, exchange it, save tokens — all in background.
 	go func() {
@@ -245,7 +277,7 @@ func StartOAuthFlow(ctx context.Context, callbackHost string, callbackPort int, 
 // exchangeCodeAndSave exchanges an auth code for tokens and saves them.
 func exchangeCodeAndSave(ctx context.Context, code, tokensPath string) error {
 	reqBody := map[string]string{
-		"clientId": ahClientID,
+		"clientId": ahClientID(),
 		"code":     code,
 	}
 	var tok tokenResponse
@@ -270,14 +302,14 @@ func doAHPost(ctx context.Context, path string, body, result any) error {
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ahAPIBase+path, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ahAPIBase()+path, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("User-Agent", ahUserAgent)
-	req.Header.Set("x-client-name", ahClientID)
+	req.Header.Set("x-client-name", ahClientID())
 	req.Header.Set("x-client-version", ahClientVersion)
-	req.Header.Set("x-application", "AHWEBSHOP")
+	req.Header.Set("x-application", ahApplication())
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 
@@ -302,11 +334,11 @@ func doAHPost(ctx context.Context, path string, body, result any) error {
 	return nil
 }
 
-// rewriteOAuthResponse intercepts login.ah.nl responses and:
+// rewriteOAuthResponse intercepts AH login responses and:
 //   - rewrites appie:// Location redirects to localOrigin/callback
 //   - strips security headers that block the proxy
 //   - sanitizes cookies for HTTP use on localhost
-//   - replaces appie:// and login.ah.nl URLs in HTML/JS/JSON bodies
+//   - replaces appie:// and AH login URLs in HTML/JS/JSON bodies
 func rewriteOAuthResponse(resp *http.Response, localOrigin, targetHost string) error {
 	// Intercept server-side redirects to appie://
 	loc := resp.Header.Get("Location")
