@@ -204,8 +204,10 @@ func registerGetBonusOffers(s *server.MCPServer, deps Deps) {
 	tool := mcp.NewTool("ah_get_bonus_offers",
 		mcp.WithTitleAnnotation("Albert Heijn: Bonus Offers"),
 		mcp.WithDescription(
-			"Get current Albert Heijn bonus/promotional offers. "+
+			"Get Albert Heijn bonus/promotional offers. "+
 				"Use this (not ah_search_products) when the user asks what is on bonus/sale/discount. "+
+				"By default returns this week's bonus; set period='next' for next week's bonus "+
+				"(https://www.ah.nl/bonus/volgende-week), which AH publishes a few days in advance. "+
 				"Supports optional keyword filter to find e.g. cheese on bonus: set query='kaas'. "+
 				"Group deals (e.g. '2+1 gratis', 'Alle yoghurt 25% korting') have id=0 and a non-empty bonus_segment_id — "+
 				"pass that to ah_get_bonus_group_products to see the individual products in the group. "+
@@ -216,6 +218,9 @@ func registerGetBonusOffers(s *server.MCPServer, deps Deps) {
 		),
 		mcp.WithString("query",
 			mcp.Description("Optional keyword filter (Dutch or English) applied client-side, e.g. 'kaas', 'vlees', 'bier'"),
+		),
+		mcp.WithString("period",
+			mcp.Description("Which bonus week to return: 'current' (default, this week) or 'next' (next week's bonus, /bonus/volgende-week)"),
 		),
 	)
 	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -232,16 +237,31 @@ func registerGetBonusOffers(s *server.MCPServer, deps Deps) {
 
 		limit := req.GetInt("limit", 20)
 		query := strings.ToLower(req.GetString("query", ""))
+		period := strings.ToLower(req.GetString("period", "current"))
 
-		// GetBonusProducts fetches all categories and fails if any one errors.
-		// Fall back to spotlight (featured deals) on error so the tool always
-		// returns something useful.
-		products, err := c.GetBonusProducts(ctx)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[Albert Heijn MCP] GetBonusProducts failed (%v), falling back to spotlight\n", err)
-			products, err = c.GetSpotlightBonusProducts(ctx)
+		var products []appie.Product
+		if period == "next" || period == "volgende" || period == "volgende-week" {
+			// Next week's bonus (https://www.ah.nl/bonus/volgende-week). AH
+			// publishes this a few days in advance, so it may not exist yet.
+			var exists bool
+			products, exists, err = getBonusProductsForPeriod(ctx, c, bonusPeriodNext)
 			if err != nil {
-				return errResult(fmt.Sprintf("Failed to get bonus products: %v", err)), nil
+				return errResult(fmt.Sprintf("Failed to get next week's bonus products: %v", err)), nil
+			}
+			if !exists {
+				return mcp.NewToolResultText("Next week's bonus has not been published by Albert Heijn yet. It usually appears a few days before the new bonus week starts."), nil
+			}
+		} else {
+			// GetBonusProducts fetches all categories and fails if any one errors.
+			// Fall back to spotlight (featured deals) on error so the tool always
+			// returns something useful.
+			products, err = c.GetBonusProducts(ctx)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[Albert Heijn MCP] GetBonusProducts failed (%v), falling back to spotlight\n", err)
+				products, err = c.GetSpotlightBonusProducts(ctx)
+				if err != nil {
+					return errResult(fmt.Sprintf("Failed to get bonus products: %v", err)), nil
+				}
 			}
 		}
 
