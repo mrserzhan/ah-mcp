@@ -358,37 +358,17 @@ func registerRemoveFromShoppingList(s *server.MCPServer, deps Deps) {
 			removeByName[strings.ToLower(n)] = true
 		}
 
-		// Filter — keep items NOT in the remove sets.
-		type keepItem struct {
-			ProductID   int    `json:"productId,omitempty"`
-			Description string `json:"description,omitempty"`
-			Quantity    int    `json:"quantity"`
-			Type        string `json:"type"`
-			OriginCode  string `json:"originCode"`
-		}
-		var keepItems []keepItem
-		for _, it := range currentList.Items {
-			pid := it.ProductDetails.Product.WebshopID
-			desc := strings.ToLower(it.Description)
-			if removeByProductID[pid] || removeByName[desc] {
-				continue // drop this item
-			}
-			keepItems = append(keepItems, keepItem{
-				ProductID:   pid,
-				Description: it.Description,
-				Quantity:    it.Quantity,
-				Type:        it.Type,
-				OriginCode:  it.OriginCode,
-			})
-		}
-
 		// Build the removal PATCH payload — quantity 0 signals deletion on the v2 API.
+		// Field set must match shoppingListItem in appie-go's AddToShoppingList exactly:
+		// the AH API's request deserializer rejects the body with a 400 "Failed to
+		// read request" if strikeThrough is omitted or description is left unset.
 		type removeItem struct {
-			ProductID   int    `json:"productId,omitempty"`
-			Description string `json:"description,omitempty"`
-			Quantity    int    `json:"quantity"`
-			Type        string `json:"type"`
-			OriginCode  string `json:"originCode"`
+			Description   string `json:"description"`
+			ProductID     int    `json:"productId,omitempty"`
+			Quantity      int    `json:"quantity"`
+			Type          string `json:"type"`
+			OriginCode    string `json:"originCode"`
+			StrikeThrough bool   `json:"strikeThrough"`
 		}
 		var removeItems []removeItem
 		for _, it := range currentList.Items {
@@ -526,11 +506,12 @@ func registerClearShoppingList(s *server.MCPServer, deps Deps) {
 			return mcp.NewToolResultText("Shopping list is already empty."), nil
 		}
 		type zeroItem struct {
-			ProductID   int    `json:"productId,omitempty"`
-			Description string `json:"description,omitempty"`
-			Quantity    int    `json:"quantity"`
-			Type        string `json:"type"`
-			OriginCode  string `json:"originCode"`
+			Description   string `json:"description"`
+			ProductID     int    `json:"productId,omitempty"`
+			Quantity      int    `json:"quantity"`
+			Type          string `json:"type"`
+			OriginCode    string `json:"originCode"`
+			StrikeThrough bool   `json:"strikeThrough"`
 		}
 		zeros := make([]zeroItem, 0, len(current.Items))
 		for _, it := range current.Items {

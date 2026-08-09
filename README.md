@@ -315,6 +315,11 @@ Call `ah_logout` then `ah_login`. Or delete `tokens.json` manually:
 **"Not logged in" error**
 Run `ah_login` first. In local mode the browser opens automatically; in remote mode (`--remote` / `AH_REMOTE=true`) open the URL the assistant returns.
 
+## Changelog
+
+### 2026-08-09
+- **Fix**: `ah_remove_from_shopping_list` and `ah_clear_shopping_list` returned `400 Bad Request` (`"Failed to read request"`) on every call. The hand-rolled shopping-list-item payload in `tools/basket.go` was missing the `strikeThrough` field and had `description` marked optional — AH's v2 API requires both on every item sent to `PATCH /shoppinglist/v2/items`. Payload now matches the field set used by `ah_add_to_shopping_list`, which already worked. Verified against a live account (item removed, then confirmed and restored).
+
 ## Acknowledgements
 
 **ah-mcp** is built on top of [**appie-go**](https://github.com/gwillem/appie-go) — a Go client library for the Albert Heijn mobile API by [@gwillem](https://github.com/gwillem). It provides the authenticated HTTP client, all API call implementations (product search, bonus offers, orders, shopping lists, member profile, bargain items), and the OAuth token format. This project uses it as a library dependency without modification.
