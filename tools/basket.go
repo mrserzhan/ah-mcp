@@ -601,8 +601,22 @@ func registerGetFavoriteLists(s *server.MCPServer, deps Deps) {
 			return errResult(fmt.Sprintf("Client error: %v", err)), nil
 		}
 
-		lists, err := c.GetShoppingLists(ctx, 0)
-		if err != nil {
+		type favoriteListsResponse struct {
+			Lists []struct {
+				ID          string `json:"id"`
+				Description string `json:"description"`
+				TotalSize   int    `json:"totalSize"`
+			} `json:"favoriteListV2"`
+		}
+		const query = `query FavoriteLists($ids: [String!]!) {
+  favoriteListV2(ids: $ids) {
+    id
+    description
+    totalSize
+  }
+}`
+		var response favoriteListsResponse
+		if err := c.DoGraphQL(ctx, query, map[string]any{"ids": []string{}}, &response); err != nil {
 			return errResult(fmt.Sprintf("Failed to get favorite lists: %v", err)), nil
 		}
 
@@ -611,9 +625,9 @@ func registerGetFavoriteLists(s *server.MCPServer, deps Deps) {
 			Name      string `json:"name"`
 			ItemCount int    `json:"item_count"`
 		}
-		results := make([]entry, 0, len(lists))
-		for _, l := range lists {
-			results = append(results, entry{ID: l.ID, Name: l.Name, ItemCount: l.ItemCount})
+		results := make([]entry, 0, len(response.Lists))
+		for _, list := range response.Lists {
+			results = append(results, entry{ID: list.ID, Name: list.Description, ItemCount: list.TotalSize})
 		}
 		return jsonResult(results)
 	})
