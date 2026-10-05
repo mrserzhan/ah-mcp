@@ -826,6 +826,8 @@ func registerReopenOrder(s *server.MCPServer, deps Deps) {
 		if err := c.ReopenOrder(ctx, orderID); err != nil {
 			return errResult(fmt.Sprintf("Failed to reopen order %d: %v", orderID, err)), nil
 		}
+		// ReopenOrder changes server-side state; select it for the current-order header.
+		c.SetOrderID(orderID)
 		return mcp.NewToolResultText(fmt.Sprintf(
 			"Order %d is now unlocked (REOPENED). Use ah_update_order_items to make changes, then call ah_revert_order when done.",
 			orderID,
@@ -950,11 +952,73 @@ func registerRevertOrder(s *server.MCPServer, deps Deps) {
 			return errResult("order_id is required"), nil
 		}
 
-		if err := c.RevertOrder(ctx, orderID); err != nil {
-			return errResult(fmt.Sprintf("Failed to revert order %d: %v", orderID, err)), nil
+		c.SetOrderID(orderID)
+		rollback := func() error {
+			rollbackCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			return c.RevertOrder(rollbackCtx, orderID)
+		}
+
+		type orderMetadataResponse struct {
+			Order struct {
+				ID                 int    `json:"id"`
+				State              string `json:"state"`
+				LastUserChangeTime string `json:"lastUserChangeTime"`
+			} `json:"order"`
+		}
+		const metadataQuery = `query ReopenedOrderMetadata { order { id state lastUserChangeTime } }`
+		metadataCtx, cancelMetadata := context.WithTimeout(ctx, 20*time.Second)
+		defer cancelMetadata()
+		var metadata orderMetadataResponse
+		if err := c.DoGraphQL(metadataCtx, metadataQuery, nil, &metadata); err != nil {
+			if rollbackErr := rollback(); rollbackErr != nil {
+				return errResult(fmt.Sprintf("Failed to read reopened order metadata: %v; rollback also failed: %v", err, rollbackErr)), nil
+			}
+			return errResult(fmt.Sprintf("Failed to read reopened order metadata; changes were rolled back: %v", err)), nil
+		}
+		if metadata.Order.ID != orderID || metadata.Order.LastUserChangeTime == "" {
+			if rollbackErr := rollback(); rollbackErr != nil {
+				return errResult(fmt.Sprintf("Invalid reopened order metadata (id=%d, state=%s); rollback also failed: %v", metadata.Order.ID, metadata.Order.State, rollbackErr)), nil
+			}
+			return errResult(fmt.Sprintf("Invalid reopened order metadata; changes were rolled back (id=%d, state=%s)", metadata.Order.ID, metadata.Order.State)), nil
+		}
+
+		type confirmResponse struct {
+			CheckoutConfirmOrder struct {
+				Status       string `json:"status"`
+				ErrorMessage string `json:"errorMessage"`
+			} `json:"checkoutConfirmOrder"`
+		}
+		const confirmMutation = `mutation ConfirmReopenedOrder($orderId: Int!, $orderInfo: CheckoutConfirmOrderPayload!) {
+  checkoutConfirmOrder(orderId: $orderId, orderInfo: $orderInfo) { status errorMessage }
+}`
+		variables := map[string]any{
+			"orderId": orderID,
+			"orderInfo": map[string]any{
+				"channel":           "IOS",
+				"orderLastModified": metadata.Order.LastUserChangeTime,
+			},
+		}
+		confirmCtx, cancelConfirm := context.WithTimeout(ctx, 30*time.Second)
+		defer cancelConfirm()
+		var confirmed confirmResponse
+		if err := c.DoGraphQL(confirmCtx, confirmMutation, variables, &confirmed); err != nil {
+			if rollbackErr := rollback(); rollbackErr != nil {
+				return errResult(fmt.Sprintf("Failed to confirm reopened order: %v; rollback also failed: %v", err, rollbackErr)), nil
+			}
+			return errResult(fmt.Sprintf("Failed to confirm reopened order; changes were rolled back: %v", err)), nil
+		}
+		if confirmed.CheckoutConfirmOrder.Status != "SUCCESS" {
+			if rollbackErr := rollback(); rollbackErr != nil {
+				return errResult(fmt.Sprintf("Failed to confirm reopened order: %s; rollback also failed: %v", confirmed.CheckoutConfirmOrder.ErrorMessage, rollbackErr)), nil
+			}
+			return errResult(fmt.Sprintf("Failed to confirm reopened order; changes were rolled back: %s", confirmed.CheckoutConfirmOrder.ErrorMessage)), nil
+		}
+		if _, err := deps.ReloadClient(); err != nil {
+			return mcp.NewToolResultText(fmt.Sprintf("Order %d was resubmitted with its changes, but the local client could not be reset: %v", orderID, err)), nil
 		}
 		return mcp.NewToolResultText(fmt.Sprintf(
-			"Order %d has been resubmitted. Your delivery is back on schedule.",
+			"Order %d has been resubmitted with its changes. Your delivery is back on schedule.",
 			orderID,
 		)), nil
 	})
