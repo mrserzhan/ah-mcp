@@ -90,6 +90,9 @@ Requires Go 1.23+.
 | `AH_TOKENS_PATH` | `~/.config/ah-mcp/tokens.json` | Override the XDG token storage path. Directory is created automatically (mode `0700`). File is written with mode `0600`. |
 | `AH_REMOTE` | `false` | Set to `true` to enable remote mode (same as `--remote` flag). Disables automatic browser opening on login. |
 | `AH_MCP_TOKEN` | *(unset)* | Secret token required to access the SSE server. When set, all requests must supply it via `Authorization: Bearer <token>` header or `?token=<token>` query parameter. Strongly recommended for public deployments. |
+| `AH_SITE` | `nl` | Set to `be` for Albert Heijn België: api.ah.be, login.ah.be, client `appie-be-ios` and `x-application: AHBEWEBSHOP`, so assortment, prices and bonus are Belgian. |
+| `AH_LOGIN_START` | `false` | Set to `true` to make `ah_login` return `<AH_CALLBACK_HOST>/start` instead of the proxied login page. `/start` redirects to the real AH login (hCaptcha does not load behind the proxy); the `appie://login-exit?code=…` redirect must then reach `<AH_CALLBACK_HOST>/callback?code=…` some other way, e.g. a URL-scheme handler in that browser. |
+| `AH_LOGIN_HINT` | *(unset)* | Extra text appended to the remote-mode `ah_login` messages, e.g. which browser to open the link in. |
 
 Copy `.env.example` to `.env` and uncomment lines you want to change.
 

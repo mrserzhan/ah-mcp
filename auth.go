@@ -18,14 +18,36 @@ import (
 	"time"
 )
 
+// Site-specific settings; AH_SITE=be switches them to Albert Heijn België.
+var (
+	ahAPIBase     = "https://api.ah.nl"
+	ahLoginBase   = "https://login.ah.nl"
+	ahClientID    = "appie-ios"
+	ahApplication = "AHWEBSHOP"
+)
+
+func init() {
+	if ahSite() == "be" {
+		ahAPIBase = "https://api.ah.be"
+		ahLoginBase = "https://login.ah.be"
+		ahClientID = "appie-be-ios"
+		ahApplication = "AHBEWEBSHOP"
+	}
+}
+
+// ahSite returns "be" when AH_SITE=be, otherwise "nl".
+func ahSite() string {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("AH_SITE")), "be") {
+		return "be"
+	}
+	return "nl"
+}
+
 const (
-	ahAPIBase        = "https://api.ah.nl"
-	ahLoginBase      = "https://login.ah.nl"
-	ahClientID       = "appie-ios"
-	ahClientVersion  = "9.28"
-	ahUserAgent      = "Appie/9.28 (iPhone17,3; iPhone; CPU OS 26_1 like Mac OS X)"
-	oauthTimeout     = 5 * time.Minute
-	tokenRefreshBuf  = 60 * time.Second
+	ahClientVersion = "9.28"
+	ahUserAgent     = "Appie/9.28 (iPhone17,3; iPhone; CPU OS 26_1 like Mac OS X)"
+	oauthTimeout    = 5 * time.Minute
+	tokenRefreshBuf = 60 * time.Second
 
 	loginSuccessHTML = `<!DOCTYPE html>
 <html><head><title>Login Successful</title></head>
@@ -188,6 +210,16 @@ func StartOAuthFlow(ctx context.Context, callbackHost string, callbackPort int, 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		io.WriteString(w, loginSuccessHTML)
 	})
+	// /start sends the browser straight to the real AH login page (hCaptcha does not
+	// load behind the proxy). The appie:// redirect must then reach /callback some
+	// other way, e.g. a URL-scheme handler in that browser.
+	directLoginURL := fmt.Sprintf(
+		"%s/login?client_id=%s&response_type=code&redirect_uri=appie://login-exit",
+		ahLoginBase, ahClientID,
+	)
+	mux.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, directLoginURL, http.StatusFound)
+	})
 
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
@@ -222,6 +254,9 @@ func StartOAuthFlow(ctx context.Context, callbackHost string, callbackPort int, 
 		"%s/login?client_id=%s&response_type=code&redirect_uri=appie://login-exit",
 		callbackHost, ahClientID,
 	)
+	if os.Getenv("AH_LOGIN_START") == "true" {
+		loginURL = callbackHost + "/start"
+	}
 
 	// Wait for the code, exchange it, save tokens — all in background.
 	go func() {
@@ -277,7 +312,7 @@ func doAHPost(ctx context.Context, path string, body, result any) error {
 	req.Header.Set("User-Agent", ahUserAgent)
 	req.Header.Set("x-client-name", ahClientID)
 	req.Header.Set("x-client-version", ahClientVersion)
-	req.Header.Set("x-application", "AHWEBSHOP")
+	req.Header.Set("x-application", ahApplication)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 

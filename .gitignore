@@ -13,3 +13,8 @@ ah-mcp.exe~
 
 # Go build artifacts
 /vendor/
+
+# Local builds
+ah-mcp-be.exe
+ah-mcp-linux
+*.log

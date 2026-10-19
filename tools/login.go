@@ -162,8 +162,8 @@ func handleLogin(ctx context.Context, deps Deps) (*mcp.CallToolResult, error) {
 			url := oauthFlow.loginURL
 			oauthFlow.Unlock()
 			return mcp.NewToolResultText(fmt.Sprintf(
-				"Still waiting for browser login. Please open this URL if you haven't yet:\n\n%s\n\nThen call ah_login again to confirm.",
-				url,
+				"Still waiting for browser login. Please open this URL if you haven't yet:\n\n%s\n%s\nThen call ah_login again to confirm.",
+				url, loginHint(),
 			)), nil
 		}
 	}
@@ -205,7 +205,16 @@ func handleLogin(ctx context.Context, deps Deps) (*mcp.CallToolResult, error) {
 	// Remote mode: unlock and return the URL — user will call ah_login again after completing.
 	oauthFlow.Unlock()
 	return mcp.NewToolResultText(fmt.Sprintf(
-		"Please open this URL in your browser to log in to Albert Heijn:\n\n%s\n\nCall ah_login again once you have completed the login.",
-		loginURL,
+		"Please open this URL in your browser to log in to Albert Heijn:\n\n%s\n%s\nCall ah_login again once you have completed the login.",
+		loginURL, loginHint(),
 	)), nil
+}
+
+// loginHint returns AH_LOGIN_HINT as an extra paragraph for the remote-mode login
+// messages, e.g. which browser the URL has to be opened in.
+func loginHint() string {
+	if h := os.Getenv("AH_LOGIN_HINT"); h != "" {
+		return "\n" + h + "\n"
+	}
+	return ""
 }
