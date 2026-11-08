@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"net"
 	"net/http"
@@ -15,17 +16,20 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const (
-	ahAPIBase        = "https://api.ah.nl"
-	ahLoginBase      = "https://login.ah.nl"
-	ahClientID       = "appie-ios"
-	ahClientVersion  = "9.28"
-	ahUserAgent      = "Appie/9.28 (iPhone17,3; iPhone; CPU OS 26_1 like Mac OS X)"
-	oauthTimeout     = 5 * time.Minute
-	tokenRefreshBuf  = 60 * time.Second
+	ahAPIBase       = "https://api.ah.nl"
+	ahLoginBase     = "https://login.ah.nl"
+	ahClientID      = "appie-ios"
+	ahClientVersion = "9.28"
+	ahUserAgent     = "Appie/9.28 (iPhone17,3; iPhone; CPU OS 26_1 like Mac OS X)"
+	oauthTimeout    = 5 * time.Minute
+	loginDonePath   = "/login-done"
+	loginDoneGrace  = 15 * time.Second
+	tokenRefreshBuf = 60 * time.Second
 
 	loginSuccessHTML = `<!DOCTYPE html>
 <html><head><title>Login Successful</title></head>
@@ -172,6 +176,9 @@ func StartOAuthFlow(ctx context.Context, callbackHost string, callbackPort int, 
 	target, _ := url.Parse(ahLoginBase)
 	codeCh := make(chan string, 1)
 	doneCh := make(chan error, 1)
+	var codeTaken atomic.Bool
+	doneServed := make(chan struct{})
+	var doneServedOnce sync.Once
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
@@ -189,6 +196,13 @@ func StartOAuthFlow(ctx context.Context, callbackHost string, callbackPort int, 
 		io.WriteString(w, loginSuccessHTML)
 	})
 
+	mux.HandleFunc(loginDonePath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		io.WriteString(w, loginSuccessHTML)
+		doneServedOnce.Do(func() { close(doneServed) })
+	})
+
+	installationID := strings.ToUpper(uuid.NewString())
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = target.Scheme
@@ -203,8 +217,24 @@ func StartOAuthFlow(ctx context.Context, callbackHost string, callbackPort int, 
 			if referer := req.Header.Get("Referer"); referer != "" {
 				req.Header.Set("Referer", strings.Replace(referer, callbackHost, target.Scheme+"://"+target.Host, 1))
 			}
+			// Since 2026-11 AH only hands out the app's authorization code (as a Next.js
+			// __N_REDIRECT in ingelogd.json) when the authorize request carries the app's
+			// installation id; without it the login ends on the "already logged in" page.
+			if req.URL.Path == "/secure/oauth/authorize" {
+				req.Header.Set("x-fraud-detection-installation-id", installationID)
+			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
+			doneURL := callbackHost + loginDonePath
+			if codeTaken.Load() && resp.Request.URL.Path == "/login/ingelogd" {
+				redirectTo(resp, doneURL)
+				return nil
+			}
+			if strings.HasSuffix(resp.Request.URL.Path, "/ingelogd.json") {
+				if err := captureNextRedirectCode(resp, codeCh, &codeTaken, doneURL); err != nil {
+					return err
+				}
+			}
 			return rewriteOAuthResponse(resp, callbackHost, target.Host)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, proxyErr error) {
@@ -219,7 +249,7 @@ func StartOAuthFlow(ctx context.Context, callbackHost string, callbackPort int, 
 
 	// Build the login URL that the user must open (via our local proxy).
 	loginURL = fmt.Sprintf(
-		"%s/login?client_id=%s&response_type=code&redirect_uri=appie://login-exit",
+		"%s/secure/oauth/authorize?client_id=%s&response_type=code&redirect_uri=appie://login-exit",
 		callbackHost, ahClientID,
 	)
 
@@ -234,6 +264,12 @@ func StartOAuthFlow(ctx context.Context, callbackHost string, callbackPort int, 
 		select {
 		case code := <-codeCh:
 			doneCh <- exchangeCodeAndSave(context.Background(), code, tokensPath)
+			// The code is taken before the browser is sent to the success page, so the
+			// server must outlive the exchange until that page has been served.
+			select {
+			case <-doneServed:
+			case <-time.After(loginDoneGrace):
+			}
 		case <-time.After(oauthTimeout):
 			doneCh <- fmt.Errorf("OAuth flow timed out after 5 minutes")
 		}
@@ -370,6 +406,73 @@ func sanitizeCookie(cookie string) string {
 		out = append(out, p)
 	}
 	return strings.Join(out, ";")
+}
+
+// captureNextRedirectCode takes the authorization code from the Next.js
+// __N_REDIRECT in ingelogd.json and sends the browser to doneURL. The login page
+// ignores the redirect in the first ingelogd.json response, the only one that
+// carries the code, and fetches the page again; so the code is taken from the
+// response itself, and once it is taken every ingelogd.json response redirects
+// to doneURL.
+func captureNextRedirectCode(resp *http.Response, codeCh chan<- string, taken *atomic.Bool, doneURL string) error {
+	body, err := readBody(resp)
+	if err != nil {
+		return err
+	}
+	var page map[string]any
+	if json.Unmarshal(body, &page) != nil {
+		setBody(resp, body)
+		return nil
+	}
+	props, _ := page["pageProps"].(map[string]any)
+	redirect, _ := props["__N_REDIRECT"].(string)
+	if code := codeFromRedirect(redirect); code != "" {
+		fmt.Fprintf(os.Stderr, "[ah-mcp] OAuth code found in ingelogd.json (code len=%d)\n", len(code))
+		select {
+		case codeCh <- code:
+		default:
+		}
+		taken.Store(true)
+	}
+	if !taken.Load() {
+		setBody(resp, body)
+		return nil
+	}
+	page["pageProps"] = map[string]any{"__N_REDIRECT": doneURL, "__N_REDIRECT_STATUS": http.StatusFound}
+	rewritten, err := json.Marshal(page)
+	if err != nil {
+		return err
+	}
+	setBody(resp, rewritten)
+	return nil
+}
+
+// codeFromRedirect returns the code query parameter of an appie:// redirect, or "".
+func codeFromRedirect(redirect string) string {
+	if !strings.HasPrefix(redirect, "appie://") {
+		return ""
+	}
+	u, err := url.Parse(redirect)
+	if err != nil {
+		return ""
+	}
+	return u.Query().Get("code")
+}
+
+// redirectTo turns resp into an empty 302 to location.
+func redirectTo(resp *http.Response, location string) {
+	_ = resp.Body.Close()
+	resp.StatusCode = http.StatusFound
+	resp.Status = "302 Found"
+	resp.Header = http.Header{"Location": {location}}
+	setBody(resp, nil)
+}
+
+// setBody replaces the (already decoded) body of resp.
+func setBody(resp *http.Response, body []byte) {
+	resp.Header.Del("Content-Encoding")
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.ContentLength = int64(len(body))
 }
 
 // readBody reads and returns the response body, handling gzip encoding.
