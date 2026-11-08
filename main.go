@@ -35,7 +35,8 @@ func appieVersion() string {
 }
 
 const (
-	defaultCallbackHost = "http://localhost:9876"
+	// AH's login captcha does not load on localhost, but does on 127.0.0.1.
+	defaultCallbackHost = "http://127.0.0.1:9876"
 	defaultCallbackPort = 9876
 	defaultMCPPort      = 3000
 )

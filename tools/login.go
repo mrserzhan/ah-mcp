@@ -34,7 +34,7 @@ func openBrowser(url string) {
 type Deps struct {
 	// TokensPath is the path to the tokens.json file.
 	TokensPath string
-	// CallbackHost is the base URL for the OAuth callback server (e.g. http://localhost:9876).
+	// CallbackHost is the base URL for the OAuth callback server (e.g. http://127.0.0.1:9876).
 	CallbackHost string
 	// CallbackPort is the port the temporary OAuth proxy listens on.
 	CallbackPort int
