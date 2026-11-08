@@ -83,7 +83,7 @@ Requires Go 1.23+.
 
 | Variable | Default | Description |
 |---|---|---|
-| `AH_CALLBACK_HOST` | `http://localhost:9876` | Base URL for the OAuth proxy. Users open this URL in their browser during login. Override to your server's public URL for remote deployments. |
+| `AH_CALLBACK_HOST` | `http://127.0.0.1:9876` | Base URL for the OAuth proxy. Users open this URL in their browser during login. Override to your server's public URL for remote deployments. |
 | `AH_CALLBACK_PORT` | `9876` | Port the temporary OAuth reverse-proxy server listens on. |
 | `AH_MCP_PORT` | `3000` | Port for the MCP HTTP server (`--transport sse` or `--transport streamable-http`). |
 | `AH_MCP_BASE_URL` | `http://localhost:3000` | Public base URL advertised to MCP clients. **Must be set for remote deployments** — otherwise clients receive a `localhost` URL they cannot reach. Example: `https://myserver.example.com` |
