@@ -38,6 +38,12 @@ const (
 	defaultCallbackHost = "http://localhost:9876"
 	defaultCallbackPort = 9876
 	defaultMCPPort      = 3000
+
+	// The OAuth login proxy only listens on loopback by default, so the login
+	// page (and the user's password) can't be reached from the local network.
+	// Remote mode needs a publicly reachable proxy, so it binds all interfaces.
+	defaultCallbackBindLocal  = "127.0.0.1"
+	defaultCallbackBindRemote = "0.0.0.0"
 )
 
 func main() {
@@ -62,6 +68,11 @@ func main() {
 	// Resolve config from environment.
 	callbackHost := envOr("AH_CALLBACK_HOST", defaultCallbackHost)
 	callbackPort := envIntOr("AH_CALLBACK_PORT", defaultCallbackPort)
+	defaultBind := defaultCallbackBindLocal
+	if *remote {
+		defaultBind = defaultCallbackBindRemote
+	}
+	callbackBind := envOr("AH_CALLBACK_BIND", defaultBind)
 	mcpPort := envIntOr("AH_MCP_PORT", defaultMCPPort)
 	tokensPath := TokensPath()
 
@@ -91,7 +102,7 @@ func main() {
 			return IsAuthenticated(tokensPath)
 		},
 		StartOAuthFlow: func(ctx context.Context) (string, <-chan error, error) {
-			return StartOAuthFlow(ctx, callbackHost, callbackPort, tokensPath)
+			return StartOAuthFlow(ctx, callbackHost, callbackBind, callbackPort, tokensPath)
 		},
 		RefreshIfNeeded: func(ctx context.Context) error {
 			return RefreshIfNeeded(ctx, tokensPath)
