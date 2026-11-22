@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -152,8 +153,8 @@ func RefreshIfNeeded(ctx context.Context, path string) error {
 	return SaveTokens(path, tf)
 }
 
-// StartOAuthFlow starts a temporary reverse-proxy HTTP server on callbackPort,
-// rewrites AH's appie:// redirect to the local /callback handler, exchanges
+// StartOAuthFlow starts a temporary reverse-proxy HTTP server on
+// bindHost:callbackPort, rewrites AH's appie:// redirect to the local /callback handler, exchanges
 // the auth code for tokens, saves them, and returns:
 //   - loginURL: the URL the user must open in their browser
 //   - done: a channel that receives nil on success or an error on failure/timeout
@@ -162,11 +163,14 @@ func RefreshIfNeeded(ctx context.Context, path string) error {
 // The proxy approach is necessary because the AH OAuth server only accepts
 // redirect_uri=appie://login-exit (a custom iOS URL scheme). The proxy
 // intercepts this redirect and converts it to an HTTP callback we can receive.
-func StartOAuthFlow(ctx context.Context, callbackHost string, callbackPort int, tokensPath string) (loginURL string, done <-chan error, err error) {
-	addr := fmt.Sprintf("0.0.0.0:%d", callbackPort)
+//
+// bindHost controls which interface the proxy listens on. Use a loopback
+// address for local use so the login proxy is not reachable from the network.
+func StartOAuthFlow(ctx context.Context, callbackHost, bindHost string, callbackPort int, tokensPath string) (loginURL string, done <-chan error, err error) {
+	addr := net.JoinHostPort(bindHost, strconv.Itoa(callbackPort))
 	listener, listenErr := net.Listen("tcp", addr)
 	if listenErr != nil {
-		return "", nil, fmt.Errorf("start OAuth server on port %d: %w", callbackPort, listenErr)
+		return "", nil, fmt.Errorf("start OAuth server on %s: %w", addr, listenErr)
 	}
 
 	target, _ := url.Parse(ahLoginBase)
