@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/rand"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -170,6 +172,11 @@ func StartOAuthFlow(ctx context.Context, callbackHost string, callbackPort int, 
 	}
 
 	target, _ := url.Parse(ahLoginBase)
+	installationID, err := newInstallationID()
+	if err != nil {
+		listener.Close()
+		return "", nil, fmt.Errorf("create installation id: %w", err)
+	}
 	codeCh := make(chan string, 1)
 	doneCh := make(chan error, 1)
 
@@ -195,6 +202,12 @@ func StartOAuthFlow(ctx context.Context, callbackHost string, callbackPort int, 
 			req.URL.Host = target.Host
 			req.Host = target.Host
 			req.Header.Del("Accept-Encoding")
+			// AH only issues the app's authorization code when the authorize
+			// request carries the app's installation id; without it the login
+			// ends on the "already logged in" page.
+			if req.URL.Path == "/secure/oauth/authorize" {
+				req.Header.Set("x-fraud-detection-installation-id", installationID)
+			}
 			// Rewrite Origin and Referer so AH's API doesn't reject the request
 			// because it sees our proxy hostname instead of login.ah.nl.
 			if origin := req.Header.Get("Origin"); origin != "" {
@@ -205,6 +218,21 @@ func StartOAuthFlow(ctx context.Context, callbackHost string, callbackPort int, 
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
+			// AH's login page (Next.js) now delivers the appie://login-exit
+			// redirect inside a React Server Component response or a JSON
+			// page-data response instead of a Location header, and the page
+			// doesn't follow it. Take the code from wherever it shows up.
+			code, where, err := sniffAppieCode(resp)
+			if err != nil {
+				return err
+			}
+			if code != "" {
+				fmt.Fprintf(os.Stderr, "[ah-mcp] OAuth code found in %s (code len=%d)\n", where, len(code))
+				select {
+				case codeCh <- code:
+				default:
+				}
+			}
 			return rewriteOAuthResponse(resp, callbackHost, target.Host)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, proxyErr error) {
@@ -219,7 +247,7 @@ func StartOAuthFlow(ctx context.Context, callbackHost string, callbackPort int, 
 
 	// Build the login URL that the user must open (via our local proxy).
 	loginURL = fmt.Sprintf(
-		"%s/login?client_id=%s&response_type=code&redirect_uri=appie://login-exit",
+		"%s/secure/oauth/authorize?client_id=%s&response_type=code&redirect_uri=appie://login-exit",
 		callbackHost, ahClientID,
 	)
 
@@ -339,7 +367,8 @@ func rewriteOAuthResponse(resp *http.Response, localOrigin, targetHost string) e
 	ct := resp.Header.Get("Content-Type")
 	if !strings.Contains(ct, "text/html") &&
 		!strings.Contains(ct, "javascript") &&
-		!strings.Contains(ct, "json") {
+		!strings.Contains(ct, "json") &&
+		!strings.Contains(ct, "text/x-component") {
 		return nil
 	}
 
@@ -386,4 +415,61 @@ func readBody(resp *http.Response) ([]byte, error) {
 	data, err := io.ReadAll(reader)
 	resp.Body.Close()
 	return data, err
+}
+
+// appieRedirectRe matches an appie://login-exit redirect with its query, also
+// when the slashes are JSON-escaped (appie:\/\/login-exit).
+var appieRedirectRe = regexp.MustCompile(`appie:(?:\\?/){2}login-exit\?([^"'\s;<>\\]*(?:\\u0026[^"'\s;<>\\]*)*)`)
+
+// sniffAppieCode looks for an appie://login-exit?code=... redirect in the
+// response headers and, for RSC and JSON responses, in the body. It returns
+// the code and where it was found. The body is left readable afterwards.
+func sniffAppieCode(resp *http.Response) (code, where string, err error) {
+	for name, values := range resp.Header {
+		for _, v := range values {
+			if c := codeFromText(v); c != "" {
+				return c, "header " + name, nil
+			}
+		}
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "text/x-component") && !strings.Contains(ct, "json") {
+		return "", "", nil
+	}
+	body, err := readBody(resp)
+	if err != nil {
+		return "", "", err
+	}
+	resp.Header.Del("Content-Encoding")
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.ContentLength = int64(len(body))
+	if c := codeFromText(string(body)); c != "" {
+		return c, "body of " + resp.Request.URL.Path, nil
+	}
+	return "", "", nil
+}
+
+// codeFromText returns the code from the first appie://login-exit redirect in s.
+func codeFromText(s string) string {
+	m := appieRedirectRe.FindStringSubmatch(s)
+	if m == nil {
+		return ""
+	}
+	q, err := url.ParseQuery(strings.ReplaceAll(m[1], `\u0026`, "&"))
+	if err != nil {
+		return ""
+	}
+	return q.Get("code")
+}
+
+// newInstallationID returns a random uppercase UUID, the format of the app's
+// installation id.
+func newInstallationID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return strings.ToUpper(fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])), nil
 }
